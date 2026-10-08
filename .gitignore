@@ -1,0 +1,39 @@
+# Local environments and generated dependencies
+.venv/
+venv/
+node_modules/
+node_modules.production-link
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Credentials, machine-specific configuration and runtime data
+.env
+.env.*
+!.env.test
+!.env.example
+.mcp.json
+runtime.json
+credentials*.json
+*.pem
+*.key
+*.sqlite3*
+*.db
+*.db-wal
+*.db-shm
+*.log
+generated-services/
+attachments/
+tasks/
+backups/
+
+# Generated archive manifests; Git records source revisions
+/MANIFEST.json
+*.tar.gz
+.DS_Store

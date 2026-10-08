@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "feishu-llm-bot"
+version = "0.3.0"
+description = "Portable supervised Feishu bot for Claude Code and TraeX sessions"
+requires-python = ">=3.11"
+dependencies = [
+  "lark-oapi==1.7.3",
+  "Pillow==12.3.0",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest==8.4.2",
+  "pytest-cov==7.0.0",
+  "ruff==0.13.2",
+]
+
+[project.scripts]
+feishu-llm-bot = "feishu_llm_bot.main:main"
+watch-worker = "feishu_llm_bot.watch_worker:main"
+feishu-bot = "feishu_llm_bot.setup_cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
