@@ -25,6 +25,8 @@ def operation_summary(op):
                 "row_count",
                 "retrieved_at",
                 "action",
+                "statistics_status",
+                "coverage_complete",
             )
             if key in result
         },
@@ -89,6 +91,11 @@ def read_artifact(store, request, request_path, inputs):
 
 def public_result(result, op_id):
     view = {"operation_id": op_id, **result}
+    if "evidence" in view:
+        # Statistics are already projected to the requested metrics. Raw JSON stays on disk.
+        for key in ("validated_response", "output_tail", "response_preview"):
+            view.pop(key, None)
+        view["read_full_output"] = "Use read_evidence for more rows; read_artifact for raw JSON"
     if "validated_response" in view:
         encoded = json.dumps(view["validated_response"], ensure_ascii=False)
         if len(encoded) > 8000:
@@ -99,3 +106,30 @@ def public_result(result, op_id):
         if key in view:
             view[key] = view[key][-4000:]
     return view
+
+
+def read_evidence(store, request, request_path, inputs):
+    from .libra_evidence import statistics
+
+    if set(inputs) - {"operation_id", "offset", "limit"}:
+        raise ValueError("Unsupported evidence arguments")
+    offset, limit = inputs.get("offset", 0), inputs.get("limit", 12)
+    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 20:
+        raise ValueError("evidence offset >= 0 and limit within 1-20 are required")
+    ident = inputs.get("operation_id")
+    # Reuse the existing task/path authorization before opening the whole bounded artifact.
+    checked = read_artifact(store, request, request_path, {"operation_id": ident, "limit": 1})
+    if checked["total_bytes"] > 16 * 1024 * 1024:
+        raise ValueError("Artifact is too large for structured evidence")
+    op = next(o for o in store.operations(request["correlation_id"]) if o["operation_id"] == ident)
+    semantic = json.loads(op["request"])
+    if op["kind"] != "libra_read" or semantic.get("action") != "report_data":
+        raise ValueError("read_evidence requires a Libra report_data operation")
+    result = json.loads(op["result"])
+    payload = json.loads(Path(result["stdout_path"]).read_text())
+    body = payload.get("data", {})
+    data = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(data, dict) or body.get("code") not in (0, 200):
+        raise ValueError("No successful statistics response in artifact")
+    return {"operation_id": ident, **statistics(data, semantic["arguments"],
+                                               offset=offset, limit=limit)}

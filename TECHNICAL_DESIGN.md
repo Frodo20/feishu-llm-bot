@@ -1,6 +1,6 @@
 # Feishu LLM Bot 通用运行时设计
 
-版本：0.3.0，2026-10-08。迁移包中的技术方案；开发主项目还保留完整的部署沿革与进展。
+版本：0.3.1，2026-10-10。迁移包中的技术方案；开发主项目还保留完整的部署沿革与进展。
 
 ## 目标与结构
 
@@ -51,7 +51,7 @@ events.sequence 是飞书任务编号；correlation_id 连接输入和任务；a
 当前执行；result_id 标识独立交付版本。取消先撤销执行身份，再停止并核验 worker，最后释放槽。
 旧 token、跨任务或迟到结果不能提交。unknown 写操作必须先核验，不能换 key 绕过。
 
-默认受管工具为 reply、read_image、operations、read_artifact 和 run。documents / libra 是
+默认受管工具为 reply、checkpoint、read_image、operations、read_artifact 和 run。documents / libra 是
 可选集成；未启用时，工具目录、prompt 和宿主 invoke 都拒绝这些接口。通用 run 保存命令输出、
 退出状态和回执；相同任务同 operation_key 的成功操作复用结果。不保证任意外部写入 exactly-once。
 
@@ -61,6 +61,56 @@ TraeX 在开始执行前保守标记 unsafe，避免无 hook 保证的原生操�
 
 默认单次硬期限 1200 秒、累计自动预算 1800 秒、启动 180 秒、无活动 300 秒；收尾预留 90 秒。
 硬期限与取消由宿主执行，软期限下受管工具停止新工作、允许读取已有成果及提交答案。
+
+## 有界分析与阶段成果（0.3.1）
+
+checkpoint(text, evidence_gaps) 保存最多 8000 字符的阶段结论，后续可替换，不结束任务。
+所有调用校验 attempt/token；图片任务须先读取图片。超时或异常结束时，没有最终答复则交付
+阶段结论并标为部分完成。取消、权限过期及 unknown 写操作仍优先，阶段成果不能绕过核验。
+
+调度器主动检查软期限并记录 finalization_requested，与模型是否调用工具无关。不向正在
+压缩的 CLI 注入消息，不承诺打断长模型请求后能生成新答复；提前保存的阶段结论提供无响应
+时的交付保障。软期限阻止新工作；阶段结论、已有结果读取和最终答复可用。证据阅读预算耗尽
+后仅用已有上下文和阶段结论收尾。
+
+Libra 默认每 6 次新查询要求保存阶段结论，每 attempt 最多 24 次；复用成功回执不重复计数，
+内部有限重试仍受硬期限约束。同一 attempt 对同一实验/指标组/指标集合两次取得缺数后，
+阻止继续变换窗口重复查询，其他指标可继续；显式继续任务可以重新检查是否已产出。
+受管证据累计输出默认 120000 字符，越线的单次回包保留，后续产物读取及新增查询受限；
+checkpoint/reply 仍可调用。这不是所有原生工具的硬 token 配额，不得绕过预算继续取数。
+
+Claude 记录流式 usage 的输入 token 高水位；成功会话超过 100000 tokens 后，下一任务
+使用新会话并附最近已确认任务摘要。没有采样的初始会话保留继承。TraeX 尚无归一 usage，
+自动轮换当前只对有使用量证据的 Claude 生效。预算和阶段数据使用 runtime_meta，无迁移。
+
+| runtime.json 参数 | 默认值 | 语义 |
+|---|---:|---|
+| max_analysis_queries | 24 | 单 attempt Libra 新查询上限 |
+| checkpoint_every | 6 | 新查询达到此间隔后，先保存阶段结论 |
+| max_evidence_characters | 120000 | 受管证据累计输出预算（字符） |
+| max_resume_input_tokens | 100000 | 有 usage 证据时的会话轮换阈值 |
+
+四项必须为正整数。旧配置省略时使用默认值；调整后应重新验证任务复杂度与收尾时间。
+
+## Libra 数据合同与部分完成
+
+MCP arguments 提供整数 ID、数组、枚举和日期说明。宿主校验必填参数、小时日期以及结论
+目标组不得包含基准组。业务 code=400 归为 invalid_arguments 并返回原因，不产生 unknown。
+
+report_data 成功回包投影所选指标的精简 evidence：原值、比较组映射、差值、p 值和
+confidence/margin 原字段；保留路径和单位，不自行换算或推断显著性。read_evidence
+按行读取已保存报表，默认 12 行、最多 20 行，页面约 12000 字符。单行超限只给原记录入口，
+不会截断序列造成日期错位。原始 JSON 仍可按字节读取。
+has_stats=0、null/空序列或请求指标不存在时不报告统计可用；有部分有效观测则为 partial，
+数字 0 是有效值，未识别格式为 unknown。读取成功、统计可用、分析完成分别判断。
+
+reply 增加 completion_scope=verified|advisory（默认 verified）与 evidence_gaps。宿主汇总
+模型声明及当前任务统计缺口；相同查询条件的新完整回包可解除该条件的缺口。存在缺口时，
+verified 不因模型声明 completed 就成功；advisory 可完成建议，但明确不代表定量核验或
+上线依据。用户目标及自由文本的语义仍依赖模型，不宣称自动判定所有分析质量。
+partial 保留现有内部终态/恢复规则；卡片和状态查询展示“部分完成”及成果，避免统一显示
+红色执行错误，也不伪造 succeeded 指标。
+
 
 ## 进程、部署和数据
 

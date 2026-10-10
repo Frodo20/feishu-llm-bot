@@ -7,6 +7,8 @@ import time
 FINAL_TOOLS = frozenset(
     {
         "mcp__feishu__reply",
+        "mcp__feishu__checkpoint",
+        "mcp__feishu__read_evidence",
         "mcp__feishu__operations",
         "mcp__feishu__read_artifact",
         "Read",
@@ -35,15 +37,11 @@ def finalization_reason(store, request):
 
 
 def request_finalization(store, request, reason):
-    key = "finalize:" + request["attempt_id"]
     with store.transaction() as db:
         store.authenticate(request["attempt_id"], request["token"], db)
-        if db.execute("SELECT 1 FROM runtime_meta WHERE key=?", (key,)).fetchone():
-            return
-        db.execute("INSERT INTO runtime_meta VALUES (?,?)", (key, json.dumps(reason)))
-        store._audit(
-            db, request["correlation_id"], request["attempt_id"], "finalization_requested", reason
-        )
+        from .task_completion import mark_finalization
+
+        mark_finalization(db, request["attempt_id"], request["correlation_id"], reason)
 
 
 def bounded_timeout(request, timeout):

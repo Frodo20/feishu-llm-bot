@@ -12,8 +12,10 @@ import json
 import re
 from datetime import datetime
 
+from .libra_evidence import statistics
+
 DEFAULT_LIBRA_CLI = "libra-cli"
-CONTRACT_VERSION = "libra-0.2.1-20260928"
+CONTRACT_VERSION = "libra-0.2.1-20261010"
 
 
 def field(kind, *, required=False, default=None, enum=None):
@@ -138,6 +140,8 @@ def _value(name, value, spec):
                 _value("global_dim_id", dimension["global_dim_id"], ID)
                 _value("global_dim_vals", dimension["global_dim_vals"], {"type": "ids"})
     if not good or ("enum" in spec and value not in spec["enum"]):
+        if kind == "id":
+            raise ValueError(f"arguments.{name} must be a positive integer, not a string")
         raise ValueError(
             f"arguments.{name} must match {kind}" + (f" {spec['enum']}" if "enum" in spec else "")
         )
@@ -173,6 +177,9 @@ def request(inputs):
             raise ValueError(f"start_date/end_date must match {fmt}") from exc
         if start > end:
             raise ValueError("end_date must not precede start_date")
+    if (action in {"important_impact", "tip_info"}
+            and normalized["base_version_id"] in normalized["version_ids"]):
+        raise ValueError("version_ids: treatment versions only; exclude base_version_id")
     timeout = inputs.get("timeout_seconds", 60)
     if type(timeout) is not int or not 1 <= timeout <= 180:
         raise ValueError("Libra timeout_seconds must be within 1-180")
@@ -213,7 +220,14 @@ def response(payload, semantic):
             return None
     elif action == "metric_search" or not isinstance(data, (dict, list)):
         return None
-    return {"format": "json", "data_available": bool(data), "data": data}
+    view = {"format": "json", "data_available": bool(data), "data": data}
+    if action == "report_data" and isinstance(data, dict):
+        evidence = statistics(data, semantic["arguments"])
+        view.update({k: evidence[k] for k in (
+            "data_available", "statistics_status", "coverage_complete",
+        )})
+        view["evidence"] = evidence
+    return view
 
 
 CSV_COLUMNS = {
@@ -275,7 +289,9 @@ def classify_failure(result, payload=None):
         reason = "needs_auth"
     elif re.search(r"\b403\b|forbidden|access.denied|permission.denied", text):
         reason = "access_denied"
-    elif result.get("exit_code") == 2 or "invalid value" in text or "badparameter" in text:
+    elif (result.get("exit_code") == 2 or "invalid value" in text or "badparameter" in text
+          or (isinstance(payload, dict) and isinstance(payload.get("data"), dict)
+              and payload["data"].get("code") == 400)):
         reason = "invalid_arguments"
     elif re.search(r"\b429\b|rate.limit|too many requests", text):
         reason = "rate_limited"
@@ -286,4 +302,8 @@ def classify_failure(result, payload=None):
         reason_code=reason,
         retryable=reason in {"command_timeout", "rate_limited", "transient_read_error"},
     )
+    if reason == "invalid_arguments" and isinstance(payload, dict):
+        body = payload.get("data")
+        if isinstance(body, dict):
+            result["message"] = str(body.get("message", "Check query parameters"))[:300]
     return "failed"

@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import tarfile
+import tomllib
 from pathlib import Path
 
 
@@ -33,7 +34,8 @@ def build(project, output):
         b"do not start a second receiver or copy credentials into the repository.\n"
     )
     manifest = {
-        "version": "0.3.0", "files": {
+        "version": tomllib.loads(files["pyproject.toml"].decode())["project"]["version"],
+        "files": {
             name: hashlib.sha256(content).hexdigest() for name, content in sorted(files.items())
         },
     }

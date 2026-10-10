@@ -245,7 +245,8 @@ class RuntimeStore(Store):
             self.authenticate(aid, token, db)
             db.execute("UPDATE runtime_attempts SET image_read=1 WHERE attempt_id=?", (aid,))
 
-    def submit_answer(self, aid, token, text, business_outcome="completed"):
+    def submit_answer(self, aid, token, text, business_outcome="completed", *,
+                      completion_scope="verified", evidence_gaps=None):
         if not isinstance(text, str) or not text.strip() or len(text) > 1_000_000:
             raise ValueError("Final answer must be nonempty and within the size limit")
         answer_pages(text)
@@ -253,6 +254,12 @@ class RuntimeStore(Store):
             raise ValueError("Invalid business outcome")
         with self.transaction() as db:
             attempt = self.authenticate(aid, token, db)
+            from .task_completion import apply_completion_contract
+
+            text, business_outcome = apply_completion_contract(
+                db, attempt["correlation_id"], text, business_outcome,
+                completion_scope, [] if evidence_gaps is None else evidence_gaps,
+            )
             message = db.execute(
                 "SELECT message_type FROM events WHERE correlation_id=?",
                 (attempt["correlation_id"],),
@@ -370,6 +377,16 @@ class RuntimeStore(Store):
             cancelled = bool(row["cancel_requested"])
             answer = row["answer"]
             outcome = row["business_outcome"] or "unanswered"
+            if (not answer and not cancelled
+                    and (reason or row["failure_reason"]) != "permission_expired"):
+                from .task_completion import _get, apply_completion_contract
+
+                checkpoint = _get(db, "checkpoint:" + aid)
+                if checkpoint:
+                    answer, outcome = apply_completion_contract(
+                        db, cid, checkpoint["text"], "partial", "verified",
+                        checkpoint["evidence_gaps"],
+                    )
             failure_op = unknown or (failed_reads if not data_reads else [])
             failure_op = failure_op[-1] if failure_op else None
             failure_id = failure_op["operation_id"] if failure_op else None
@@ -426,7 +443,12 @@ class RuntimeStore(Store):
                     outcome = "partial" if artifacts else "unanswered"
                 elif (artifacts or (data_reads and not row["answer"])) and outcome != "blocked":
                     outcome = "partial"
-                summary = f"任务 #{self._sequence(db, cid)} 已停止，原因：{failure_label(reason)}。"
+                summary = (
+                    f"任务 #{self._sequence(db, cid)} 已保存部分成果，"
+                    f"尚有证据或工作待补齐（{failure_label(reason)}）。"
+                    if outcome == "partial" and not cancelled and not unknown
+                    else f"任务 #{self._sequence(db, cid)} 已停止，原因：{failure_label(reason)}。"
+                )
                 if failure_op:
                     summary += "\n失败步骤：" + {
                         "cli_help": "查询工具帮助",
@@ -445,7 +467,7 @@ class RuntimeStore(Store):
                     for operation in data_reads[-6:]:
                         detail = json.loads(operation["result"] or "{}")
                         summary += "\n- " + (detail.get("action") or operation["kind"])
-                    if not row["answer"]:
+                    if not answer:
                         summary += "\n这些结果尚未形成完整分析结论，不能据此判断实验放量。"
                 recovery = recovery_options(db, cid, state=state)
                 if recovery["needs_reconciliation"]:
@@ -805,7 +827,8 @@ class RuntimeStore(Store):
             elif command in {"/status", "/result"}:
                 r = selected
                 answer = (
-                    f"机器人接收服务在线。\n\n任务 #{r['sequence']}：{state_label(r['state'])}。"
+                    f"机器人接收服务在线。\n\n任务 #{r['sequence']}："
+                    f"{state_label(r['state'], r['business_outcome'])}。"
                     f"\n等待处理：{sum(x['state'] in {'queued', 'retry_wait'} for x in rows)} 条。"
                 )
                 recovery = recovery_options(db, r["correlation_id"])
@@ -907,7 +930,9 @@ class RuntimeStore(Store):
         return True
 
 
-def state_label(state):
+def state_label(state, business_outcome=None):
+    if state in {"failed", "suspended"} and business_outcome == "partial":
+        return "部分完成，已有成果可查看或继续补充"
     return {
         "queued": "排队中",
         "running": "执行中",
@@ -939,6 +964,8 @@ def failure_label(reason):
         "transient_read_error": "查询暂时不可用，重试预算已用完",
         "uncertain_operation": "外部操作结果不确定，需要核验",
         "business_incomplete": "业务尚未完成",
+        "query_budget": "查询预算已用完，交付已确认成果",
+        "evidence_budget": "证据阅读预算已用完，交付已确认成果",
         "read_failed": "读取未成功",
         "command_timeout": "读取命令超时",
         "execution_interrupted": "操作执行中断",

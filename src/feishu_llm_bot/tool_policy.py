@@ -18,6 +18,8 @@ MANAGED_TOOLS = frozenset(
         "mcp__feishu__fetch_document",
         "mcp__feishu__libra_read",
         "mcp__feishu__read_artifact",
+        "mcp__feishu__read_evidence",
+        "mcp__feishu__checkpoint",
     }
 )
 LOCAL_WORK_TOOLS = frozenset(

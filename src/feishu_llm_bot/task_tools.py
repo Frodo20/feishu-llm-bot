@@ -28,6 +28,7 @@ from .progress import read_environment
 from .runtime_common import private_json
 from .runtime_store import RuntimeStore
 from .task_budget import bounded_timeout, finalization_reason, finish_message, record_failure
+from .task_completion import account_output, collection_gate, save_checkpoint
 
 
 def validated_payload(result, kind, semantic):
@@ -120,6 +121,18 @@ def classify_read(result, kind, semantic):
 
 
 def invoke(request_path, name, inputs):
+    result = _invoke(request_path, name, inputs)
+    if name in {"libra_read", "read_artifact", "read_evidence", "operations"}:
+        request = json.loads(Path(request_path).read_text())
+        store = RuntimeStore(Path(request["config"]["database_path"]))
+        try:
+            result = account_output(store, request, name, result)
+        finally:
+            store.close()
+    return result
+
+
+def _invoke(request_path, name, inputs):
     request = json.loads(Path(request_path).read_text())
     config = request["config"]
     store = RuntimeStore(Path(config["database_path"]))
@@ -131,7 +144,7 @@ def invoke(request_path, name, inputs):
         integrations = enabled_integrations(config)
         if ((name in {"create_document", "cli_help", "search_documents", "fetch_document"}
              and "documents" not in integrations)
-                or (name == "libra_read" and "libra" not in integrations)):
+                or (name in {"libra_read", "read_evidence"} and "libra" not in integrations)):
             raise ValueError("This integration is not enabled for this instance")
         cid = attempt["correlation_id"]
         if not isinstance(inputs, dict):
@@ -140,15 +153,23 @@ def invoke(request_path, name, inputs):
             raise PermissionError("The requested task is not this execution")
         if name == "reply":
             store.submit_answer(
-                aid, token, inputs["text"], inputs.get("business_outcome", "completed")
+                aid, token, inputs["text"], inputs.get("business_outcome", "completed"),
+                completion_scope=inputs.get("completion_scope", "verified"),
+                evidence_gaps=inputs.get("evidence_gaps", []),
             )
             return {
                 "status": "Final answer durably saved; host will deliver it after execution ends."
             }
+        if name == "checkpoint":
+            return save_checkpoint(store, request, inputs)
         if name == "operations":
             return task_artifacts.operations(store, cid, **inputs)
-        if name == "read_artifact":
-            return task_artifacts.read_artifact(store, request, request_path, inputs)
+        if name in {"read_artifact", "read_evidence"}:
+            gate = collection_gate(store, request, name, inputs)
+            if gate:
+                return gate
+            reader = getattr(task_artifacts, name)
+            return reader(store, request, request_path, inputs)
         if name == "libra_read" and inputs.get("action") == "help":
             return {"contract_version": libra_contracts.CONTRACT_VERSION,
                     "actions": libra_contracts.ACTIONS,
@@ -183,6 +204,9 @@ def invoke(request_path, name, inputs):
         if name in READ_KINDS:
             semantic, execution = read_request(name, inputs)
             timeout = execution["timeout_seconds"]
+            gate = collection_gate(store, request, name, inputs)
+            if gate:
+                return gate
         elif name == "run":
             command, timeout = inputs.get("command"), inputs.get("timeout_seconds", 120)
             if (

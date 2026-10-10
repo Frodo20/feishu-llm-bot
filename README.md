@@ -6,6 +6,9 @@
 Python 管理消息和任务，Node MCP 提供受管工具；Claude/TraeX 使用已有本机登录。
 每次任务从指定会话分叉执行，成功后延续新的会话历史。
 
+0.3.1 增加有界分析、阶段成果保存和部分完成展示。Libra 查询返回精简指标与缺数状态，
+达到查询或阅读预算后收尾；Claude 历史过大时从已确认摘要开始新会话。
+
 ## 安装和启动
 
 需要 Python 3.11+、Node.js 20+，以及已登录的 Claude 或 TraeX。Linux 已验证；
@@ -53,6 +56,7 @@ python3 scripts/install.py
 - [技术方案](TECHNICAL_DESIGN.md)
 - [部署指南](PORTABLE_DEPLOYMENT.md)
 - [开发约定](AGENTS.md)
+- [0.3.1 改进与验证](RELIABILITY_0_3_1.md)
 
 0.3.0 基线通过 393 项 Python 测试、Ruff、Node MCP 验证，以及 Claude/TraeX 真实工具调用
 和历史继承验证。MCP SDK 锁定 1.32.1。目标用户仍需确认自己的飞书应用权限和首条消息收发。

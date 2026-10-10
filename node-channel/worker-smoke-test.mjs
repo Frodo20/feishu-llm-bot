@@ -40,8 +40,15 @@ try {
   });
   await client.connect(transport);
   const definitions = await client.listTools();
-  assert.equal(definitions.tools.length, 10);
-  for (const name of ['cli_help', 'search_documents', 'fetch_document', 'libra_read', 'read_artifact']) {
+  assert.equal(definitions.tools.length, 12);
+  const libraSchema = definitions.tools.find(tool => tool.name === 'libra_read').inputSchema;
+  assert.equal(libraSchema.properties.arguments.properties.experiment_id.type, 'integer');
+  assert.match(libraSchema.properties.arguments.properties.version_ids.description, /Exclude/);
+  const checkpoint = await client.callTool({ name: 'checkpoint', arguments: {
+    text: 'Initial evidence recorded', evidence_gaps: ['More evidence needed'],
+  } });
+  assert.equal(checkpoint.isError, false);
+  for (const name of ['cli_help', 'search_documents', 'fetch_document', 'libra_read', 'read_artifact', 'read_evidence']) {
     assert.ok(definitions.tools.some(tool => tool.name === name));
   }
   const searched = await client.callTool({ name: 'search_documents', arguments: {

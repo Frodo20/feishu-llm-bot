@@ -64,6 +64,12 @@ def check_backend_binding(store, config):
 def validate_runtime_config(config):
     backend_name(config)
     enabled_integrations(config)
+    for key, default in {"max_analysis_queries": 24, "checkpoint_every": 6,
+                         "max_evidence_characters": 120000,
+                         "max_resume_input_tokens": 100000}.items():
+        value = config.get(key, default)
+        if type(value) is not int or value <= 0:
+            raise ValueError(f"{key} must be a positive integer")
     if config.get("worker_runner", "systemd") not in {"systemd", "process"}:
         raise ValueError("worker_runner must be systemd or process")
     if config.get("worker_access", "workspace") not in {"workspace", "full"}:

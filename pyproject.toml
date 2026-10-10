@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "feishu-llm-bot"
-version = "0.3.0"
+version = "0.3.1"
 description = "Portable supervised Feishu bot for Claude Code and TraeX sessions"
 requires-python = ">=3.11"
 dependencies = [

@@ -139,6 +139,8 @@ class Orchestrator:
         if outcome == "succeeded":
             if latest["session_id"]:
                 self.store.set_meta("session_id", latest["session_id"])
+                self.store.set_meta("session_input_tokens:" + latest["session_id"],
+                                    self.store.meta("input_tokens:" + aid, 0))
             self.store.set_meta("consecutive_model_failures", 0)
         elif reason in {"model_error", "startup_error", "worker_exit"}:
             count = self.store.meta("consecutive_model_failures", 0) + 1
@@ -200,7 +202,24 @@ class Orchestrator:
                 started = self.monotonic_starts.setdefault(aid, time.monotonic())
                 elapsed = time.monotonic() - started
                 remaining = self.config.get("total_budget_seconds", 1800) - task["total_seconds"]
-                if elapsed >= min(self.config.get("task_timeout_seconds", 1200), remaining):
+                budget = min(self.config.get("task_timeout_seconds", 1200), remaining)
+                soft = deadlines(budget, self.config.get("finalization_reserve_seconds", 90),
+                                 now=0)["soft_deadline_monotonic"]
+                if elapsed >= soft:
+                    # This runs even while the model is silent or compacting its context.
+                    from .task_completion import mark_finalization
+
+                    with self.store.transaction() as db:
+                        current = db.execute(
+                            "SELECT 1 FROM runtime_attempts a JOIN runtime_tasks t "
+                            "USING(correlation_id) WHERE a.attempt_id=? AND t.attempt_id=? "
+                            "AND a.state IN ('starting','running') AND t.cancel_requested=0",
+                            (aid, aid),
+                        ).fetchone()
+                        if current:
+                            mark_finalization(db, aid, attempt["correlation_id"],
+                                              "soft_deadline", now)
+                if elapsed >= budget:
                     reason = "task_timeout"
                 elif attempt["state"] == "starting" and elapsed >= self.config.get(
                     "startup_grace_seconds", 180
@@ -223,6 +242,10 @@ class Orchestrator:
         if now < self.store.meta("model_retry_at", 0):
             return
         session_id = self.store.meta("session_id", self.config.get("session_id"))
+        if session_id and self.store.meta("session_input_tokens:" + session_id, 0) >= (
+            self.config.get("max_resume_input_tokens", 100000)
+        ):
+            session_id = None  # The worker still receives bounded confirmed task context.
         attempt = self.store.claim(now, session_id)
         if attempt is None:
             return

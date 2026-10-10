@@ -14,11 +14,42 @@ const schema = (properties, required = Object.keys(properties)) => ({
   type: 'object', properties, required, additionalProperties: false,
 });
 const string = { type: 'string' };
+const positiveId = { type: 'integer', minimum: 1, description: 'Positive numeric ID, never a quoted string.' };
+const ids = { type: 'array', items: positiveId, minItems: 1, maxItems: 50 };
+const strings = { type: 'array', items: string, minItems: 1, maxItems: 50 };
+const gaps = { type: 'array', items: { type: 'string', maxLength: 500 }, maxItems: 20 };
+const libraArguments = schema({
+  experiment_id: positiveId, app_id: positiveId, metric_group: positiveId,
+  base_vid: positiveId, base_version_id: positiveId, bundle_id: positiveId,
+  with: { type: 'array', items: { type: 'string', enum: ['versions', 'review', 'relations', 'layer',
+    'analysis', 'real_traffic', 'domain_group', 'launch_info'] } },
+  with_version_config: { type: 'boolean' }, metric_keys: strings,
+  top: { type: 'integer', minimum: 1, maximum: 50 }, workers: { type: 'integer', minimum: 1, maximum: 16 },
+  start_date: { type: 'string', description: 'YYYY-MM-DD for d; YYYY-MM-DD HH:MM for h.' },
+  end_date: { type: 'string', description: 'Same format as start_date; aligned full-day windows preferred.' },
+  period_type: { type: 'string', enum: ['d', 'h'] }, selected_metric_ids: ids, selected_vids: ids,
+  version_ids: { ...ids, description: 'Treatment versions ONLY. Exclude base_version_id.' },
+  view_type: { type: 'string', enum: ['merge', 'series'] },
+  merge_type: { type: 'string', enum: ['avg', 'sum', 'total'] },
+  data_region: { type: 'string', enum: ['other', 'eu_ttp', 'tx'] }, combine: { type: 'boolean' },
+  mult_cmp_corr: { type: ['boolean', 'integer'], description: 'Boolean for report_data; 0/1 for conclusions.' },
+  confidence_threshold: { type: 'number', exclusiveMinimum: 0, exclusiveMaximum: 1 },
+  type: strings, global_dimension_with_metric: { type: 'boolean' }, is_bundle_report: { type: 'boolean' },
+  global_dimensions: { type: 'array', maxItems: 20,
+    items: schema({ global_dim_id: positiveId, global_dim_vals: ids }) },
+}, []);
 const definitions = [
   { name: 'reply', description: 'Durably save the final answer for this task.',
     inputSchema: schema({ correlation_id: string, text: string,
-      business_outcome: { type: 'string', enum: ['completed', 'partial', 'unanswered', 'blocked'] } },
+      business_outcome: { type: 'string', enum: ['completed', 'partial', 'unanswered', 'blocked'] },
+      completion_scope: { type: 'string', enum: ['verified', 'advisory'],
+        description: 'Default verified. Advisory completes recommendations only, not quantitative verification.' },
+      evidence_gaps: gaps },
       ['correlation_id', 'text']) },
+  { name: 'checkpoint', description: 'Save replaceable partial findings before more queries. Does not end the task. '
+      + 'These findings are delivered if execution later times out. List remaining evidence gaps.',
+    inputSchema: schema({ text: { type: 'string', minLength: 1, maxLength: 8000 },
+      evidence_gaps: gaps, correlation_id: string }, ['text', 'evidence_gaps']) },
   { name: 'read_image', description: 'Read the authenticated current task image.',
     inputSchema: schema({ correlation_id: string }) },
   { name: 'operations', description: 'Paginated compact summaries of saved operations; use read_artifact for output.',
@@ -28,13 +59,17 @@ const definitions = [
     inputSchema: schema({ operation_id: string, artifact: { type: 'string', enum: ['stdout', 'stderr'] },
       offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 16000 } },
       ['operation_id']) },
+  { name: 'read_evidence', description: 'Read compact statistic rows from a saved Libra report_data operation. '
+      + 'Preserves metric paths, original units, differences and confidence fields. Prefer to raw JSON paging.',
+    inputSchema: schema({ operation_id: string, offset: { type: 'integer', minimum: 0 },
+      limit: { type: 'integer', minimum: 1, maximum: 20 } }, ['operation_id']) },
   { name: 'libra_read', description: 'Query Libra with typed arguments and safe read retries. Call action=help once for contracts. '
       + 'Use for experiments, metrics and reports instead of run/Bash. metric_keys and version_ids are JSON arrays. '
       + 'Use the same operation_key to reuse a successful query; changed query semantics need a new key.',
     inputSchema: schema({ operation_key: string,
       action: { type: 'string', enum: ['help', 'experiment_get', 'metric_search', 'report_data',
         'report_bundle', 'important_impact', 'tip_info', 'recycle'] },
-      arguments: { type: 'object' }, timeout_seconds: { type: 'integer', minimum: 1, maximum: 180 } },
+      arguments: libraArguments, timeout_seconds: { type: 'integer', minimum: 1, maximum: 180 } },
       ['action']) },
   { name: 'run', description: 'Run a command with durable stdout, exit status and a fixed operation key. '
       + 'May have side effects. Use typed help/search/fetch for reads. Reusing a successful key returns saved results.',
@@ -57,8 +92,8 @@ const definitions = [
 const integrations = request.config.integrations ?? ['documents', 'libra'];
 const documentTools = new Set(['create_document', 'cli_help', 'search_documents', 'fetch_document']);
 const enabled = definitions.filter(d => (!documentTools.has(d.name) || integrations.includes('documents'))
-  && (d.name !== 'libra_read' || integrations.includes('libra')));
-const server = new Server({ name: 'feishu', version: '0.3.0' }, { capabilities: { tools: {} } });
+  && (!['libra_read', 'read_evidence'].includes(d.name) || integrations.includes('libra')));
+const server = new Server({ name: 'feishu', version: '0.3.1' }, { capabilities: { tools: {} } });
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: enabled }));
 server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
   if (!enabled.some(d => d.name === params.name)) throw new Error('Unknown or disabled tool');

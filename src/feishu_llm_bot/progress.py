@@ -54,6 +54,8 @@ def progress_card(state: dict, *, now: float, connection: str) -> dict:
         "cancelled",
         "suspended",
     }
+    partial = (terminal and state.get("business_outcome") == "partial"
+               and state.get("task_state") != "cancelled")
     title = (
         "Claude · 已完成"
         if terminal and not failed
@@ -85,6 +87,8 @@ def progress_card(state: dict, *, now: float, connection: str) -> dict:
         current = "正在等待模型响应。"
     if not terminal and connection != "桥接在线":
         title = "Claude · 连接异常"
+    if partial:
+        title, current = "Claude · 部分完成", "已有成果见下方；证据缺口和继续方式已保留。"
     elapsed = max(0, int((state.get("ended_at") or now) - state["created_at"]))
     lines = [
         title.removeprefix("Claude · "),
@@ -184,7 +188,7 @@ def progress_card(state: dict, *, now: float, connection: str) -> dict:
         "schema": "2.0",
         "config": {"update_multi": True, "enable_forward": False},
         "header": {
-            "template": "red"
+            "template": "orange" if partial else "red"
             if failed
             else "green"
             if terminal

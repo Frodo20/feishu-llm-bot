@@ -28,7 +28,7 @@
 解压迁移包后进入目录：
 
 ```bash
-tar -xzf feishu-llm-bot-0.3.0.tar.gz
+tar -xzf feishu-llm-bot-0.3.1.tar.gz
 cd feishu-llm-bot
 python3 scripts/install.py
 ```
@@ -133,12 +133,13 @@ launchd 用户服务在用户登录后运行，机器睡眠时无法保持消息
 
 ## 6. 可选能力、权限和运行边界
 
-新实例默认提供 `reply`、`read_image`、`operations`、`read_artifact`、`run`。
+新实例默认提供 `reply`、`checkpoint`、`read_image`、`operations`、`read_artifact`、`run`。
 不要求安装 bytedcli、Libra、Forge 或任何特定公司的工具。
 
 - `--integration documents`：启用结构化文档搜索、读取和创建；需要目标用户已登录的
   bytedcli。可在 runtime.json 设置 `bytedcli_command`，飞书 bot 的 App Secret 不代替该登录。
-- `--integration libra`：启用 Libra 结构化读取；需要已登录的 libra-cli，可设置 `libra_cli_command`。
+- `--integration libra`：启用 Libra 结构化读取及已保存报表的 `read_evidence`；需要已登录的
+  libra-cli，可设置 `libra_cli_command`。查询/阶段保存/阅读预算见技术方案的有界分析参数表。
 - 其他工具可由模型通过本机 CLI 使用，受其权限和任务预算约束。
 
 Claude 沿用认证 worker 的自动工具授权，工具调用先检查 attempt 身份，工作权限属于当前

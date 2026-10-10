@@ -40,6 +40,8 @@ READ_TOOLS = {
     "mcp__feishu__fetch_document",
     "mcp__feishu__libra_read",
     "mcp__feishu__read_artifact",
+    "mcp__feishu__read_evidence",
+    "mcp__feishu__checkpoint",
 }
 
 
@@ -54,6 +56,12 @@ def consume_event(store, request, entry, steps):
     if kind == "assistant":
         if entry.get("isApiErrorMessage") or entry.get("error"):
             return "model_error"
+        usage = entry.get("message", {}).get("usage", {})
+        tokens = sum(v for k, v in usage.items() if k in {
+            "input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens",
+        } and type(v) is int and v >= 0)
+        if tokens:
+            store.set_meta("input_tokens:" + aid, max(tokens, store.meta("input_tokens:" + aid, 0)))
         for block in entry.get("message", {}).get("content", []):
             if block.get("type") != "tool_use":
                 continue
@@ -123,6 +131,13 @@ def build_prompt(store, request):
             "Inspect a prior failed step, correct arguments, and continue other independent reads.",
             "Use mcp__feishu__read_artifact for full saved output; operations is paginated. "
             "Reuse successful operations, and explicitly name remaining evidence gaps.",
+            "First gather the smallest sufficient evidence set, then analyze. For Libra use "
+            "the compact evidence in query responses and read_evidence for more metric rows. "
+            "Do not page through whole JSON reports or keep broadening queries. "
+            "Save a checkpoint(text, evidence_gaps) after initial findings and before expanding "
+            "the analysis; the host may require one before more queries. Checkpoints are partial "
+            "and remain deliverable if the model times out or compacts. Budget messages require "
+            "you to finalize; do not evade them through Bash, Read or other tools.",
             "The host reserves time to finalize. When told soft_deadline/repeated_tool_error, "
             "stop new work and return saved findings with business_outcome=partial/unanswered. "
             "Never loop on the same blocked tool. Do not claim an incomplete analysis is complete.",
@@ -138,6 +153,11 @@ def build_prompt(store, request):
             "When the user's goal is unanswered, partial or blocked, call mcp__feishu__reply "
             "with that business_outcome and the useful explanation or existing artifacts. "
             "Only declare completed when the user's requested work is finished.",
+            "For recommendations, reply with completion_scope=advisory and list evidence_gaps; "
+            "this completes advice only, never quantitative verification or a launch decision. "
+            "Use completion_scope=verified for measurement/verification goals. Missing statistics "
+            "must be disclosed and will prevent verified completion. Do not switch to advisory "
+            "to avoid unfinished verification explicitly requested by the user.",
             "Do not delegate, create agents or session cron jobs. Recurring schedules and "
             "execution are managed by the bot service.",
             "For images, use mcp__feishu__read_image with the exact correlation_id first.",
