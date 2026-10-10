@@ -20,6 +20,14 @@ TERMINAL = {"succeeded", "failed", "cancelled", "suspended"}
 
 
 class RuntimeStore(Store):
+    def prune_events(self, *, older_than_seconds=7 * 24 * 3600):
+        """Keep runtime history until tasks, receipts and attachments share a retention policy.
+
+        The inherited gateway startup cleanup only knows the legacy events table.
+        Deleting those rows breaks task lookup, continuation and confirmed context.
+        """
+        return 0
+
     def __init__(self, path):
         super().__init__(path)
         self._connection.execute("PRAGMA busy_timeout=1000")

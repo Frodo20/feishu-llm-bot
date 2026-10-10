@@ -129,6 +129,10 @@ attachments。运行库采用 WAL，legacy schema=6 / runtime schema=2，本次�
 
 ## 验证与维护
 
+运行时网关启动不再执行 legacy events 的七天删除；RuntimeStore 保留消息、任务、回执和
+结果的关联，避免重启后任务查询/继续/上下文丢失。旧 Store 清理语义不变。统一的数据/附件
+保留政策尚待设计，因此运行时历史当前不会自动按年龄回收，需监控磁盘使用。
+
 `python3 scripts/install.py --dev` 后运行：
 
 ```bash

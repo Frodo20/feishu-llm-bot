@@ -43,6 +43,38 @@ def test_saved_answer_releases_execution_before_feishu_delivery(db):
     assert second and second["correlation_id"] != a["correlation_id"]
 
 
+@pytest.mark.parametrize("reason", [None, "task_timeout"])
+def test_gateway_restart_preserves_old_runtime_history_and_results(tmp_path, reason):
+    from feishu_llm_bot.service import SessionBridgeService
+
+    path = tmp_path / "bot.sqlite3"
+    store = RuntimeStore(path)
+    a = task(store)
+    if reason is None:
+        store.submit_answer(a["attempt_id"], a["token"], "confirmed history")
+    finish(store, a, reason)
+    with store.transaction() as connection:
+        connection.execute("UPDATE events SET status='replied',updated_at=?",
+                           (int(time.time()) - 30 * 86400,))
+    store.close()
+    store = RuntimeStore(path)
+    service = SessionBridgeService(store=store, replies=object(), emit_inbound=lambda _: None,
+                                   dispatch_enabled=False, reply_chunk_chars=4000,
+                                   max_inbound_chars=100000, queue_size=128)
+    try:
+        service.start()
+        assert store.prune_events(older_than_seconds=1) == 0
+        assert store.get_by_correlation(a["correlation_id"]) is not None
+        assert store.context()
+        assert store._connection.execute("SELECT count(*) FROM runtime_results").fetchone()[0] == 1
+        if reason:
+            assert store.handle_control(IncomingMessage.text("continue", "chat", "/continue 1"))
+            assert store.claim(time.time())["correlation_id"] == a["correlation_id"]
+    finally:
+        service.stop()
+        store.close()
+
+
 def test_model_failure_budget_and_new_tasks_not_starved(db):
     a = task(db)
     cid = a["correlation_id"]
